@@ -4,7 +4,7 @@ The intent it will eventually be to process lighthouse logs
 in particular failed missed and successful attestations.
 
 At the moment it just reads `data/log.txt` and prints the
-the number of characters in the first line.
+line number the length and the line contents.
 
 ## License
 
