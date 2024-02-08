@@ -8,3 +8,19 @@ edition = "2021"
 
 [dependencies]
 
+[profile.release]
+# With no options --release size=3,788,856 for X86_64 with rustc 1.76.0
+# With all options --release size=317,776 for X86_64 with rustc 1.76.0
+
+# With just this size=362,832
+strip = true
+
+# Add this with strip, size=366,928 (i.e. gets bigger above just strip)
+opt-level = 'z'
+
+# Add this with strip, size=334,160 (i.e. reduce size of just strip)
+lto = true
+
+# Add this with strip, size=362,832 (i.e. no change)
+codegen-units = 1
+
