@@ -1,6 +1,6 @@
+use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
-use std::fs::File;
 use std::process::ExitCode;
 
 use lighthouse_logs_lib::process;
@@ -31,4 +31,3 @@ fn main() -> ExitCode {
         Err(_) => 2.into(),
     }
 }
-
