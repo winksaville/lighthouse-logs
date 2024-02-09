@@ -1,4 +1,4 @@
-use std::io::{prelude::*, BufReader, Read, Seek};
+use std::io::{prelude::*, BufReader, Read, Seek, Error, ErrorKind};
 use log::debug;
 
 pub trait MyTrait: std::io::Read + Seek {}
@@ -7,17 +7,21 @@ pub trait MyTrait: std::io::Read + Seek {}
 // returns 0 if EOF.
 pub fn process_line(line_number: usize, line: &str) -> usize {
     let len = line.len();
-    println!("process_line {line_number}:- len={len} line=\"{line}\"");
+    debug!("process_line {line_number}:- len={len} line=\"{line}\"");
     len
 }
 
 pub fn process<R: Read>(
     rdr: R,
-    fname: &str,
+    _fname: &str,
     max_line_length: u64,
 ) -> std::io::Result<(usize, usize)> {
     // line_count and max_processed_line_len
     let mut line = String::with_capacity(max_line_length as usize);
+    let mut beginning_of_line = String::with_capacity(max_line_length as usize);
+    let mut full_line_len = 0usize;
+    let mut line_number = 0usize;
+    let mut max_processed_line_len = 0usize;
 
     // See: https://doc.rust-lang.org/std/io/trait.BufRead.html#method.read_line
     // where it says:
@@ -34,90 +38,81 @@ pub fn process<R: Read>(
     //  
     let mut reader = BufReader::with_capacity(max_line_length as usize, rdr);
 
-    let mut line_number = 0usize;
-    let mut max_processed_line_len = 0usize;
-    loop {
-        match reader.by_ref().take(max_line_length).read_line(&mut line) {
-            Ok(orig_len) => {
-                line_number += 1;
+    #[derive(Debug, PartialEq)]
+    enum State {
+        BeginningOfLine,
+        DiscardUntilLF,
+        ProcessBeginningOfLine,
+    }
+    let mut state: State = State::BeginningOfLine;
 
-                let mut too_long = false;
-                if orig_len == 0 {
-                    // If we read 0 bytes, we are at EOF
-                    debug!("{line_number}: EOF");
-                } else if line.ends_with("\n") {
+    while let Ok(orig_len) = reader.by_ref().take(max_line_length).read_line(&mut line) {
+
+        debug!("TOL: state={state:?} line_number={line_number} orig_len={orig_len} line=\"{line}\"");
+
+        match state {
+            State::BeginningOfLine => {
+                if line.ends_with("\n") {
+                    debug!("BeginningOfLine {line_number}: state = ProcessBeginningOfLine");
+
                     // We have a complete line, remove the LF
                     line.pop();
+                    beginning_of_line = line.clone();
+                    state = State::ProcessBeginningOfLine;
                 } else {
                     // It might be too long or it's the last line and there is no-lf.
-                    // Either way it will be handled properly in too_long loop.
-                    debug!("Line {line_number} is too long");
-                    too_long = true;
+                    // Either way it will be handled properly in DiscardUntilLF.
+                    beginning_of_line = line.clone();
+                    debug!("BeginningOfLine {line_number}: state = DiscardUntilLF");
+                    state = State::DiscardUntilLF;
                 }
-
-                let mut line_len = line.len();
-                debug!("{line_number}, line_len={line_len}");
-
-                // Process the line
-                assert!(line_len == process_line(line_number, &line));
-
-                if too_long {
-                    // Loop until we find the end of the line, ignoring the rest
-                    let mut ignore_loops = 0;
-                    loop {
-                        line.clear();
-
-                        match reader.by_ref().take(max_line_length).read_line(&mut line) {
-                            Ok(len) => {
-                                // Update current line length and max_processed_line_len
-
-                                if len == 0 {
-                                    debug!("ignore_loop: {ignore_loops}: EOF ignoring, line_len={line_len}");
-                                    break;
-                                } else if line.ends_with("\n") {
-                                    debug!("ignore_loop: {ignore_loops}: LF end of line ignoring, line_len={line_len}");
-                                    line.pop();
-                                    line_len += line.len();
-                                    break;
-                                } else {
-                                    line_len += len;
-                                    debug!("ignore_loop: {ignore_loops}: line_number={line_number}, ignoring len={len} line_len={line_len}");
-                                }
-                            }
-                            Err(e) => {
-                                debug!("ignore_loop: {ignore_loops}: error reading \"{fname}\": {e}");
-
-                                // TODO, we should probably return the line count and max line length
-                                return Err(e);
-                            }
-                        }
-                        ignore_loops += 1;
-                    }
-                }
-
-                debug!("{line_number}, line_len={line_len}");
-
-                // Remember the longest line we've processed
-                if line_len > max_processed_line_len {
-                    max_processed_line_len = line_len;
-                }
-
-                if orig_len == 0 {
-                    line_number -= 1;
-                    // If we read 0 bytes, we are at EOF
-                    debug!("EOF: {line_number} lines, max line length={max_processed_line_len}");
-                    return Ok((line_number, max_processed_line_len));
-                }
-
-                // Clear the line for the next read
-                line.clear();
+                full_line_len += beginning_of_line.len();
             }
-            Err(e) => {
-                debug!("Error reading \"{fname}\": {e}");
-                return Err(e);
+            State::DiscardUntilLF => {
+                if line.ends_with("\n") {
+                    full_line_len += orig_len - 1;
+                    state = State::ProcessBeginningOfLine;
+                    debug!("DiscardUntilLF {line_number}: LF, done discarding");
+                } else if orig_len == 0 {
+                    state = State::ProcessBeginningOfLine;
+                    debug!("DiscardUntilLF {line_number}: EOF, done");
+                } else {
+                    full_line_len += orig_len;
+                    debug!("DiscardUntilLF {line_number}: no LF or EOF, continue to discard");
+                }
+            }
+            State::ProcessBeginningOfLine => {
+                return Err(Error::new(ErrorKind::Other, "State::ProcessBeginningOfLine should not occur"));
             }
         }
+
+        if state == State::ProcessBeginningOfLine {
+            // Arrive here if we've got a complete line and we need
+            // to ProcessBeginningOfLine or it's EOF.
+            line_number += 1;
+            let line_len = beginning_of_line.len();
+            debug!("ProcessBeginningOfLine {line_number}: line_len={line_len}");
+            assert!(line_len == process_line(line_number, &beginning_of_line)); //.trim_end_matches('\n')));
+
+            // Remember the longest line we've processed
+            if full_line_len > max_processed_line_len {
+                max_processed_line_len = full_line_len;
+            }
+
+            full_line_len = 0;
+            state = State::BeginningOfLine;
+        }
+
+        if orig_len == 0 {
+            // If we read 0 bytes, we are at EOF
+            debug!("EOF: {line_number} lines, max line length={max_processed_line_len}");
+            break;
+        }
+
+        line.clear();
     }
+
+    Ok((line_number, max_processed_line_len))
 }
 
 #[cfg(test)]
