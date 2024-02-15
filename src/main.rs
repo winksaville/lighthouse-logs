@@ -2,9 +2,8 @@ use std::fs::File;
 use std::process::ExitCode;
 
 use custom_logger::env_logger_init;
+use lighthouse_logs_lib::ReadTruncatedLines;
 use log::{debug, error};
-
-use lighthouse_logs_lib::process;
 
 fn main() -> ExitCode {
     env_logger_init("error");
@@ -20,13 +19,15 @@ fn main() -> ExitCode {
         }
     };
 
-    // Proccess the stream and create an ExitCode
-    let exit_code = match process(&f, fname, 1024) {
-        Ok(_) => 0.into(),
-        Err(_) => 2.into(),
-    };
+    // Proccess the file
+    let reader = std::io::BufReader::new(f);
+    let mut rtl = ReadTruncatedLines::new(reader, fname, 1024, 1024);
+
+    while let Some(line) = rtl.read_truncated_line() {
+        println!("{}", line);
+    }
 
     debug!("main:-");
 
-    exit_code
+    0.into()
 }
