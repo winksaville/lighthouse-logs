@@ -1,4 +1,5 @@
 use std::io::{prelude::*, BufReader, Read, Seek};
+use log::debug;
 
 pub trait MyTrait: std::io::Read + Seek {}
 
@@ -43,21 +44,22 @@ pub fn process<R: Read>(
                 let mut too_long = false;
                 if orig_len == 0 {
                     // If we read 0 bytes, we are at EOF
-                    println!("{line_number}: EOF");
+                    debug!("{line_number}: EOF");
                 } else if line.ends_with("\n") {
                     // We have a complete line, remove the LF
                     line.pop();
                 } else {
                     // It might be too long or it's the last line and there is no-lf.
                     // Either way it will be handled properly in too_long loop.
-                    println!("Line {line_number} is too long");
+                    debug!("Line {line_number} is too long");
                     too_long = true;
                 }
 
                 let mut line_len = line.len();
-                println!("{line_number}, line_len={line_len}");
+                debug!("{line_number}, line_len={line_len}");
 
-                assert!(line_len == process_line(line_number, &line.trim_end_matches('\n')));
+                // Process the line
+                assert!(line_len == process_line(line_number, &line));
 
                 if too_long {
                     // Loop until we find the end of the line, ignoring the rest
@@ -70,20 +72,20 @@ pub fn process<R: Read>(
                                 // Update current line length and max_processed_line_len
 
                                 if len == 0 {
-                                    println!("ignore_loop: {ignore_loops}: EOF ignoring, line_len={line_len}");
+                                    debug!("ignore_loop: {ignore_loops}: EOF ignoring, line_len={line_len}");
                                     break;
                                 } else if line.ends_with("\n") {
-                                    println!("ignore_loop: {ignore_loops}: LF end of line ignoring, line_len={line_len}");
+                                    debug!("ignore_loop: {ignore_loops}: LF end of line ignoring, line_len={line_len}");
                                     line.pop();
                                     line_len += line.len();
                                     break;
                                 } else {
                                     line_len += len;
-                                    println!("ignore_loop: {ignore_loops}: line_number={line_number}, ignoring len={len} line_len={line_len}");
+                                    debug!("ignore_loop: {ignore_loops}: line_number={line_number}, ignoring len={len} line_len={line_len}");
                                 }
                             }
                             Err(e) => {
-                                println!("ignore_loop: {ignore_loops}: error reading \"{fname}\": {e}");
+                                debug!("ignore_loop: {ignore_loops}: error reading \"{fname}\": {e}");
 
                                 // TODO, we should probably return the line count and max line length
                                 return Err(e);
@@ -93,7 +95,7 @@ pub fn process<R: Read>(
                     }
                 }
 
-                println!("{line_number}, line_len={line_len}");
+                debug!("{line_number}, line_len={line_len}");
 
                 // Remember the longest line we've processed
                 if line_len > max_processed_line_len {
@@ -103,7 +105,7 @@ pub fn process<R: Read>(
                 if orig_len == 0 {
                     line_number -= 1;
                     // If we read 0 bytes, we are at EOF
-                    println!("EOF: {line_number} lines, max line length={max_processed_line_len}");
+                    debug!("EOF: {line_number} lines, max line length={max_processed_line_len}");
                     return Ok((line_number, max_processed_line_len));
                 }
 
@@ -111,7 +113,7 @@ pub fn process<R: Read>(
                 line.clear();
             }
             Err(e) => {
-                println!("Error reading \"{fname}\": {e}");
+                debug!("Error reading \"{fname}\": {e}");
                 return Err(e);
             }
         }
@@ -123,6 +125,15 @@ mod test {
     use super::*;
     use std::fs::File;
     use std::io::Cursor;
+    use test_log::test;
+    use log::error;
+
+    #[test]
+    #[should_panic] // Comment out and you will see the error message
+    fn test_error_and_panic() {
+        error!("Error prior to panic");
+        panic!();
+    }
 
     #[test]
     fn test_process() {
@@ -130,8 +141,8 @@ mod test {
         let f = match File::open(fname) {
             Ok(fr) => fr,
             Err(e) => {
-                println!("Could not open \"{fname}\": {e}");
-                return;
+                error!("Could not open \"{fname}\": {e}");
+                panic!();
             }
         };
         let mut reader = BufReader::new(f);

@@ -15,6 +15,9 @@ name = "lighthouse_logs"
 path = "src/main.rs"
 
 [dependencies]
+custom_logger = { git = "https://github.com/winksaville/custom_logger", version = "0.3.0" }
+log = "0.4.20"
+test-log = "0.2.14"
 
 [profile.release]
 # With no options --release size=3,788,856 for X86_64 with rustc 1.76.0
