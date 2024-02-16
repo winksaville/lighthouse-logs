@@ -19,13 +19,12 @@ impl<R: Read> ReadTruncatedLines<R> {
     pub fn new(
         reader: R,
         reader_id_like_file_name: &str,
-        capacity: usize,
         max_line_length: u64,
     ) -> Self {
         ReadTruncatedLines {
-            reader: BufReader::with_capacity(capacity, reader),
+            reader: BufReader::with_capacity(max_line_length as usize, reader),
             reader_id: reader_id_like_file_name.to_string(),
-            capacity,
+            capacity: max_line_length as usize,
             max_line_length,
             full_line_len: 0,
             line: String::with_capacity(max_line_length as usize),
@@ -36,7 +35,6 @@ impl<R: Read> ReadTruncatedLines<R> {
     }
 
     pub fn read_truncated_line(&mut self) -> Option<&str> {
-        //<ReadTruncatedLines<R> as IntoIterator>::Item> {
         self.line.clear();
         match self
             .reader
@@ -82,10 +80,9 @@ impl<R: Read> ReadTruncatedLines<R> {
                                 if len == 0 {
                                     debug!("ignore_loop: {ignore_loops}: EOF ignoring, full_line_len={}", self.full_line_len);
                                     break;
-                                } else if self.line.ends_with("\n") {
+                                } else if self.discard_line.ends_with("\n") {
                                     debug!("ignore_loop: {ignore_loops}: LF end of line ignoring, full_line_len={}", self.full_line_len);
-                                    self.line.pop();
-                                    self.full_line_len += self.line.len();
+                                    self.full_line_len += self.discard_line.len() - 1;
                                     break;
                                 } else {
                                     self.full_line_len += len;
@@ -152,123 +149,6 @@ impl<R: Read> ReadTruncatedLines<R> {
     }
 }
 
-// The nominal mininal line length is 1 because it ends with a LF (0x0A)
-// returns 0 if EOF.
-pub fn process_line(line_number: usize, line: &str) -> usize {
-    let len = line.len();
-    println!("process_line {line_number}:- len={len} line=\"{line}\"");
-    len
-}
-
-pub fn process<R: Read>(
-    rdr: R,
-    fname: &str,
-    max_line_length: u64,
-) -> std::io::Result<(usize, usize)> {
-    // line_count and max_processed_line_len
-    let mut line = String::with_capacity(max_line_length as usize);
-
-    // See: https://doc.rust-lang.org/std/io/trait.BufRead.html#method.read_line
-    // where it says:
-    //   "This function is blocking and should be used carefully: it is possible
-    //    for an attacker to continuously send bytes without ever sending a newline
-    //    or EOF. You can use take to limit the maximum number of bytes read."
-    //
-    // At first I couldn't get using `take()` to compile it was complaining that
-    // the reader was moving. Here[1] was the key, I needed to use `by_ref().take(max)`
-    // to be able to use in the loop and not an error. This then allows me to take the
-    // max_line_length bytes from each line and ignore the rest.
-    //
-    // [1]:https://users.rust-lang.org/t/idiomatic-way-of-reading-lines-in-a-safe-manner/62942
-    //  
-    let mut reader = BufReader::with_capacity(max_line_length as usize, rdr);
-
-    let mut line_number = 0usize;
-    let mut max_processed_line_len = 0usize;
-    loop {
-        match reader.by_ref().take(max_line_length).read_line(&mut line) {
-            Ok(orig_len) => {
-                line_number += 1;
-
-                let mut too_long = false;
-                if orig_len == 0 {
-                    // If we read 0 bytes, we are at EOF
-                    debug!("{line_number}: EOF");
-                } else if line.ends_with("\n") {
-                    // We have a complete line, remove the LF
-                    line.pop();
-                } else {
-                    // It might be too long or it's the last line and there is no-lf.
-                    // Either way it will be handled properly in too_long loop.
-                    debug!("Line {line_number} is too long");
-                    too_long = true;
-                }
-
-                let mut line_len = line.len();
-                debug!("{line_number}, line_len={line_len}");
-
-                // Process the line
-                assert!(line_len == process_line(line_number, &line));
-
-                if too_long {
-                    // Loop until we find the end of the line, ignoring the rest
-                    let mut ignore_loops = 0;
-                    loop {
-                        line.clear();
-
-                        match reader.by_ref().take(max_line_length).read_line(&mut line) {
-                            Ok(len) => {
-                                // Update current line length and max_processed_line_len
-
-                                if len == 0 {
-                                    debug!("ignore_loop: {ignore_loops}: EOF ignoring, line_len={line_len}");
-                                    break;
-                                } else if line.ends_with("\n") {
-                                    debug!("ignore_loop: {ignore_loops}: LF end of line ignoring, line_len={line_len}");
-                                    line.pop();
-                                    line_len += line.len();
-                                    break;
-                                } else {
-                                    line_len += len;
-                                    debug!("ignore_loop: {ignore_loops}: line_number={line_number}, ignoring len={len} line_len={line_len}");
-                                }
-                            }
-                            Err(e) => {
-                                debug!("ignore_loop: {ignore_loops}: error reading \"{fname}\": {e}");
-
-                                // TODO, we should probably return the line count and max line length
-                                return Err(e);
-                            }
-                        }
-                        ignore_loops += 1;
-                    }
-                }
-
-                debug!("{line_number}, line_len={line_len}");
-
-                // Remember the longest line we've processed
-                if line_len > max_processed_line_len {
-                    max_processed_line_len = line_len;
-                }
-
-                if orig_len == 0 {
-                    line_number -= 1;
-                    // If we read 0 bytes, we are at EOF
-                    debug!("EOF: {line_number} lines, max line length={max_processed_line_len}");
-                    return Ok((line_number, max_processed_line_len));
-                }
-
-                // Clear the line for the next read
-                line.clear();
-            }
-            Err(e) => {
-                debug!("Error reading \"{fname}\": {e}");
-                return Err(e);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -296,7 +176,7 @@ mod test {
             }
         };
         let mut reader = BufReader::new(f);
-        let mut rtl = ReadTruncatedLines::new(&mut reader, fname, 1024, 1024);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, fname, 1024);
 
         for expected_line in expected_lines.into_iter() {
             let line = rtl.read_truncated_line().unwrap();
@@ -308,82 +188,110 @@ mod test {
     }
 
     #[test]
-    fn test_process() {
-        let fname = "data/log.txt";
-        let f = match File::open(fname) {
-            Ok(fr) => fr,
-            Err(e) => {
-                error!("Could not open \"{fname}\": {e}");
-                panic!();
-            }
-        };
-        let mut reader = BufReader::new(f);
-        let (lines, max_line_len) = process(&mut reader, fname, 1024).unwrap();
-        assert_eq!(lines, 4);
-        assert_eq!(max_line_len, 11);
-    }
-
-    #[test]
     fn test_len_0() {
         let data = b"".to_vec();
         let mut reader = Cursor::new(data);
-        let (lines, max_line_len) = process(&mut reader, "test", 10).expect("work");
-        assert_eq!(lines, 0);
-        assert_eq!(max_line_len, 0);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, "test", 1024);
+
+        // On an empty file we should get None and line_number
+        // and max_processed_full_line_len should not change
+        assert_eq!(None, rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 0);
+        assert_eq!(rtl.line_number(), 0);
+        assert_eq!(rtl.max_processed_full_line_len(), 0);
+        assert_eq!(None, rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 0);
+        assert_eq!(rtl.line_number(), 0);
+        assert_eq!(rtl.max_processed_full_line_len(), 0);
+    }
+
+    #[test]
+    fn test_just_lf() {
+        let data = b"\n".to_vec();
+        let mut reader = Cursor::new(data);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, "test", 1024);
+
+        assert_eq!(Some(""), rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 0);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), 0);
+
+        // On an empty file we should get None and line_number
+        // and max_processed_full_line_len should not change
+        assert_eq!(None, rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 0);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), 0);
+        assert_eq!(None, rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 0);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), 0);
     }
 
     #[test]
     fn test_len_1_no_lf() {
         let data = b"1".to_vec();
         let mut reader = Cursor::new(data);
-        let (lines, max_line_len) = process(&mut reader, "test", 10).expect("work");
-        assert_eq!(lines, 1);
-        assert_eq!(max_line_len, 1);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, "test", 1024);
+        assert_eq!(Some("1"), rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 1);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), 1);
+
+        // Subsequent reads should return None and line_number is the number of lines total
+        // and max_processed_full_line_len should not change
+        assert_eq!(None, rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 0);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), 1);
+        assert_eq!(None, rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 0);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), 1);
     }
 
     #[test]
     fn test_len_equals_max_line_length_1() {
         let data = b"1".to_vec();
         let mut reader = Cursor::new(data);
-        let (lines, max_line_len) = process(&mut reader, "test", 1).expect("work");
-        assert_eq!(lines, 1);
-        assert_eq!(max_line_len, 1);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, "test", 1);
+        assert_eq!(Some("1"), rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 1);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), 1);
     }
 
     #[test]
     fn test_len_equals_max_line_length_1_with_lf() {
         let data = b"1\n".to_vec();
         let mut reader = Cursor::new(data);
-        let (lines, max_line_len) = process(&mut reader, "test", 1).expect("work");
-        assert_eq!(lines, 1);
-        assert_eq!(max_line_len, 1);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, "test", 1);
+        assert_eq!(Some("1"), rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 1);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), 1);
     }
 
     #[test]
     fn test_len_equals_max_line_length_10() {
         let data = b"0123456789".to_vec();
         let mut reader = Cursor::new(data);
-        let (lines, max_line_len) = process(&mut reader, "test", 10).expect("work");
-        assert_eq!(lines, 1);
-        assert_eq!(max_line_len, 10);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, "test", 10);
+        assert_eq!(Some("0123456789"), rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), 10);
     }
 
     #[test]
     fn test_len_equals_max_line_length_10_with_lf() {
         let data = b"0123456789\n".to_vec();
         let mut reader = Cursor::new(data);
-        let (lines, max_line_len) = process(&mut reader, "test", 10).expect("work");
-        assert_eq!(lines, 1);
-        assert_eq!(max_line_len, 10);
-    }
-
-    #[test]
-    fn test_len_1_just_lf() {
-        let data = b"\n".to_vec();
-        let mut reader = Cursor::new(data);
-        let (lines, max_line_len) = process(&mut reader, "test", 10).expect("work");
-        assert_eq!(lines, 1);
-        assert_eq!(max_line_len, 0);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, "test", 10);
+        assert_eq!(Some("0123456789"), rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), 10);
     }
 
     #[test]
@@ -391,9 +299,11 @@ mod test {
         let data = b"This is a line that is too long to fit in the buffer".to_vec();
         let expected_max_line_len = data.len();
         let mut reader = Cursor::new(data);
-        let (lines, max_line_len) = process(&mut reader, "test", 10).expect("work");
-        assert_eq!(lines, 1);
-        assert_eq!(expected_max_line_len, max_line_len);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, "test", 10);
+        assert_eq!(Some("This is a "), rtl.read_truncated_line());
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), expected_max_line_len);
     }
 
     #[test]
@@ -401,23 +311,111 @@ mod test {
         let line1 = b"First line that is too long to fit in the buffer\n".to_vec();
         let line2 = b"Second line that shorter to still too long".to_vec();
         let expected_max_line_len = line1.len() - 1;
-        let data = [line1, line2].concat();
+        let expected_line1 = std::str::from_utf8(&line1[0..10]).unwrap();
+        debug!("expected_line1='{expected_line1}'");
+        let expected_line2 = std::str::from_utf8(&line2[0..10]).unwrap();
+        debug!("expected_line2='{expected_line2}'");
+
+        let data = [line1.clone(), line2.clone()].concat();
         let mut reader = Cursor::new(data);
-        let (lines, max_line_len) = process(&mut reader, "test", 10).expect("work");
-        assert_eq!(lines, 2);
-        assert_eq!(expected_max_line_len, max_line_len);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, "test", 10);
+        assert_eq!(rtl.read_truncated_line(), Some(expected_line1));
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), line1.len() - 1);
+        assert_eq!(rtl.read_truncated_line(), Some(expected_line2));
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 2);
+        assert_eq!(rtl.max_processed_full_line_len(), expected_max_line_len);
     }
 
     #[test]
-    fn test_three_long_lines() {
-        let line1 = b"First line that is too long to fit in the buffer\n".to_vec();
-        let line2 = b"Second line that shorter to still too long\n".to_vec();
-        let line3 = b"Thrid line that shorter to still too long\n".to_vec();
+    fn test_three_long_lines_1_is_longest() {
+        let line1 = b"First line that is longest to fit in the buffer\n".to_vec();
+        let line2 = b"Second line that's shorter but still too long\n".to_vec();
+        let line3 = b"Thrid line that's shorter but still too long\n".to_vec();
         let expected_max_line_len = line1.len() - 1;
-        let data = [line1, line2, line3].concat();
+        let expected_line1 = std::str::from_utf8(&line1[0..10]).unwrap();
+        debug!("expected_line1='{expected_line1}'");
+        let expected_line2 = std::str::from_utf8(&line2[0..10]).unwrap();
+        debug!("expected_line2='{expected_line2}'");
+        let expected_line3 = std::str::from_utf8(&line3[0..10]).unwrap();
+        debug!("expected_line3='{expected_line3}'");
+
+        let data = [line1.clone(), line2.clone(), line3.clone()].concat();
         let mut reader = Cursor::new(data);
-        let (lines, max_line_len) = process(&mut reader, "test", 10).expect("work");
-        assert_eq!(lines, 3);
-        assert_eq!(expected_max_line_len, max_line_len);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, "test", 10);
+        assert_eq!(rtl.read_truncated_line(), Some(expected_line1));
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), line1.len() - 1);
+        assert_eq!(rtl.read_truncated_line(), Some(expected_line2));
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 2);
+        assert_eq!(rtl.max_processed_full_line_len(), expected_max_line_len);
+        assert_eq!(rtl.read_truncated_line(), Some(expected_line3));
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 3);
+        assert_eq!(rtl.max_processed_full_line_len(), expected_max_line_len);
+    }
+
+    #[test]
+    fn test_three_long_lines_2_is_longest() {
+        let line1 = b"First line that's shorter but still too long\n".to_vec();
+        let line2 = b"Second line that is longest and longer than buffer\n".to_vec();
+        let line3 = b"Thrid line that's shorter but still too long\n".to_vec();
+        let expected_max_line_len = line2.len() - 1;
+        let expected_line1 = std::str::from_utf8(&line1[0..10]).unwrap();
+        debug!("expected_line1='{expected_line1}'");
+        let expected_line2 = std::str::from_utf8(&line2[0..10]).unwrap();
+        debug!("expected_line2='{expected_line2}'");
+        let expected_line3 = std::str::from_utf8(&line3[0..10]).unwrap();
+        debug!("expected_line3='{expected_line3}'");
+
+        let data = [line1.clone(), line2.clone(), line3.clone()].concat();
+        let mut reader = Cursor::new(data);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, "test", 10);
+        assert_eq!(rtl.read_truncated_line(), Some(expected_line1));
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), line1.len() - 1);
+        assert_eq!(rtl.read_truncated_line(), Some(expected_line2));
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 2);
+        assert_eq!(rtl.max_processed_full_line_len(), expected_max_line_len);
+        assert_eq!(rtl.read_truncated_line(), Some(expected_line3));
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 3);
+        assert_eq!(rtl.max_processed_full_line_len(), expected_max_line_len);
+    }
+
+    #[test]
+    fn test_three_long_lines_3_is_longest() {
+        let line1 = b"First line that's shorter but still too long\n".to_vec();
+        let line2 = b"Second line that's shorter but still too long\n".to_vec();
+        let line3 = b"Third line that is longest and longer than buffer\n".to_vec();
+        let expected_max_line_len = line3.len() - 1;
+        let expected_line1 = std::str::from_utf8(&line1[0..10]).unwrap();
+        debug!("expected_line1='{expected_line1}'");
+        let expected_line2 = std::str::from_utf8(&line2[0..10]).unwrap();
+        debug!("expected_line2='{expected_line2}'");
+        let expected_line3 = std::str::from_utf8(&line3[0..10]).unwrap();
+        debug!("expected_line3='{expected_line3}'");
+
+        let data = [line1.clone(), line2.clone(), line3.clone()].concat();
+        let mut reader = Cursor::new(data);
+        let mut rtl = ReadTruncatedLines::new(&mut reader, "test", 10);
+        assert_eq!(rtl.read_truncated_line(), Some(expected_line1));
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 1);
+        assert_eq!(rtl.max_processed_full_line_len(), line1.len() - 1);
+        assert_eq!(rtl.read_truncated_line(), Some(expected_line2));
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 2);
+        assert_eq!(rtl.max_processed_full_line_len(), line2.len() - 1);
+        assert_eq!(rtl.read_truncated_line(), Some(expected_line3));
+        assert_eq!(rtl.line_len(), 10);
+        assert_eq!(rtl.line_number(), 3);
+        assert_eq!(rtl.max_processed_full_line_len(), expected_max_line_len);
     }
 }

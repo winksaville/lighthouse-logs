@@ -21,7 +21,7 @@ fn main() -> ExitCode {
 
     // Proccess the file
     let reader = std::io::BufReader::new(f);
-    let mut rtl = ReadTruncatedLines::new(reader, fname, 1024, 1024);
+    let mut rtl = ReadTruncatedLines::new(reader, fname, 1024);
 
     while let Some(line) = rtl.read_truncated_line() {
         println!("{}", line);
