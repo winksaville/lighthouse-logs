@@ -1,5 +1,5 @@
-use std::io::{prelude::*, BufReader, Read, Seek};
 use log::debug;
+use std::io::{prelude::*, BufReader, Read, Seek};
 
 pub trait MyTrait: std::io::Read + Seek {}
 
@@ -16,11 +16,7 @@ pub struct ReadTruncatedLines<R: Read> {
 }
 
 impl<R: Read> ReadTruncatedLines<R> {
-    pub fn new(
-        reader: R,
-        reader_id_like_file_name: &str,
-        max_line_length: u64,
-    ) -> Self {
+    pub fn new(reader: R, reader_id_like_file_name: &str, max_line_length: u64) -> Self {
         ReadTruncatedLines {
             reader: BufReader::with_capacity(max_line_length as usize, reader),
             reader_id: reader_id_like_file_name.to_string(),
@@ -48,7 +44,7 @@ impl<R: Read> ReadTruncatedLines<R> {
                     // If we read 0 bytes, we are at EOF
                     debug!("{}: EOF", self.line_number);
                     return None;
-                } else if self.line.ends_with("\n") {
+                } else if self.line.ends_with('\n') {
                     // We have a complete line, remove the LF
                     self.line.pop();
                 } else {
@@ -80,7 +76,7 @@ impl<R: Read> ReadTruncatedLines<R> {
                                 if len == 0 {
                                     debug!("ignore_loop: {ignore_loops}: EOF ignoring, full_line_len={}", self.full_line_len);
                                     break;
-                                } else if self.discard_line.ends_with("\n") {
+                                } else if self.discard_line.ends_with('\n') {
                                     debug!("ignore_loop: {ignore_loops}: LF end of line ignoring, full_line_len={}", self.full_line_len);
                                     self.full_line_len += self.discard_line.len() - 1;
                                     break;
@@ -152,10 +148,10 @@ impl<R: Read> ReadTruncatedLines<R> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use log::error;
     use std::fs::File;
     use std::io::Cursor;
     use test_log::test;
-    use log::error;
 
     #[test]
     #[should_panic] // Comment out and you will see the error message
